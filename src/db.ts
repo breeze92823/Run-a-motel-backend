@@ -1,6 +1,7 @@
 import { MongoClient, type Collection } from "mongodb";
 
 import { LEADERBOARD_STATS } from "./constants.js";
+import type { MotelSave } from "./motel.js";
 
 // Bloxity Legion hosting injects MONGODB_URI per game+channel -- an isolated database with
 // scoped credentials. A local `npm start` normally has no Mongo reachable, so a missing or
@@ -36,6 +37,7 @@ export interface PlayerDoc {
   giftsClaimed?: number[]; // GIFTS.list indexes claimed this round
   potions?: Record<string, number>; // potion id -> count (gifts.js)
   lastSeen?: number; // epoch ms of the last activity
+  motel?: MotelSave; // Run a Motel: money, upgrades, staff, shop, rooms (motel.ts; client economy.js)
   // Spin wheel (spin.ts): written only by the server's `spin` handler, never by saveProgress.
   spins?: number; // spins ready to use
   spinAt?: number; // epoch ms the next free spin arrives

@@ -69,3 +69,19 @@ export const ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 // The client's per-browser fallback id for players who are not signed in to Bloxity.
 // Guests are never persisted.
 export const GUEST_ID_PREFIX = "guest-";
+
+// The motel save (motel.ts; client src/economy.js snapshot): catalog ids owned / counted (with
+// slack over the client's ~40), room numbers up to MOTEL_ROOM_MAX (101..207 today), levels, charges,
+// timers at most MOTEL_FUTURE_MS ahead (the longest cash investment is 1 h), the offline income
+// rate ($/s), and the gameplay modules' free-form `game` sections (bytes of JSON, nesting depth).
+export const MOTEL_IDS_MAX = 128;
+export const MOTEL_ROOMS_MAX = 64;
+export const MOTEL_ROOM_MAX = 999;
+// Furniture in use per room: one per slot (client DECOR.items has 16 slots today), with slack.
+export const MOTEL_FURNITURE_MAX = 32;
+export const MOTEL_LEVEL_MAX = 100;
+export const MOTEL_CHARGES_MAX = 1e6;
+export const MOTEL_FUTURE_MS = 7 * 24 * 3600 * 1000;
+export const MOTEL_RATE_MAX = 1e12;
+export const MOTEL_GAME_MAX_BYTES = 32 * 1024;
+export const MOTEL_GAME_MAX_DEPTH = 8;

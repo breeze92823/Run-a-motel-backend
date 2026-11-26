@@ -3,6 +3,7 @@ import {
   PET_SLOTS_MAX, GIFTS_MAX, POTION_KINDS_MAX, POTION_COUNT_MAX, ID_PATTERN,
 } from "./constants.js";
 import type { PlayerDoc, SavedPet } from "./db.js";
+import { sanitizeMotel } from "./motel.js";
 
 export function finite(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -95,5 +96,9 @@ export function sanitizeProgress(raw: unknown): Partial<PlayerDoc> | null {
     out.giftsClaimed = [...new Set(claimed)];
   }
   if (raw.potions !== undefined) out.potions = sanitizePotions(raw.potions);
+  if (raw.motel !== undefined) {
+    const motel = sanitizeMotel(raw.motel);
+    if (motel) out.motel = motel;
+  }
   return out;
 }
