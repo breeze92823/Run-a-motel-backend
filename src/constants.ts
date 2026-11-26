@@ -1,5 +1,8 @@
 // Keep in step with the client's src/config.js by hand.
-export const ROOM_MAX_CLIENTS = 50;
+// Players per room = motel plots on the road (client PLOTS.count: 3 per side of the main road).
+// Also the Legion deploy's seatCap (.github/workflows/deploy.yml reads it from here).
+export const ROOM_MAX_CLIENTS = 6;
+export const PLOT_COUNT = ROOM_MAX_CLIENTS;
 
 // Longest accepted strings.
 export const NAME_MAX = 64;
@@ -8,7 +11,12 @@ export const PFP_MAX_LEN = 512;
 // Presence (presence.ts): the Bloxity avatar JSON relayed for the others to draw, the most pets
 // drawn per player, and the pose bounds (|x|, |y| and z up to `xy` m; z down to -`z` m: a race's
 // track runs far down -Z; speed in m/s).
-export const AVATAR_MAX_LEN = 3000;
+export const AVATAR_MAX_LEN = 6000;
+// Boxity outfit key (the character kit dresses a remote rig from it) and emote catalogue id.
+export const OUTFIT_MAX_LEN = 256;
+export const EMOTE_ID_MAX = 64;
+// The roster's `motel` view (motelView.ts): what the others draw of a player's motel.
+export const MOTEL_VIEW_MAX_LEN = 8000;
 export const PRESENCE_PETS_MAX = 8;
 export const POSE_BOUNDS = { xy: 5000, z: 1e8, speed: 2000 };
 

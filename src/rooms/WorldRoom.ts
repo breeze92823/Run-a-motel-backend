@@ -1,12 +1,31 @@
 import { Room, Client, CloseCode } from "colyseus";
 import { WorldState, PlayerState } from "./schema/WorldState.js";
-import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
+import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, PLOT_COUNT, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
 import { getPlayers, type PlayerDoc } from "../db.js";
 import { sanitizeProgress } from "../sanitize.js";
 import { accrue, rollWedge, spinStateFrom, type SpinState } from "../spin.js";
 import { claimDaily, dailyFields, dailyView, readDaily, rollDaily, type DailyState } from "../daily.js";
 import { applyAvatar, applyLoadout, applyPose } from "../presence.js";
 import { ranksOf, topBoards } from "../leaderboard.js";
+import { trustClientIds, verifyAdReward, verifyToken, type VerifiedPlayer } from "../boxity.js";
+import { flushReports, trackPlayer, untrackPlayer } from "../reports.js";
+import { motelView } from "../motelView.js";
+
+// Who a connection is (onAuth / identify): the Boxity-verified account, or, in local dev only
+// (boxity.trustClientIds), the id the client names. userId "" = a guest nothing is saved for.
+interface Identity {
+  userId: string;
+  username?: string;
+  pfp?: string;
+  carriedFrom: string[];
+}
+
+async function identify(options: { token?: unknown; userId?: unknown } | undefined): Promise<Identity> {
+  const v: VerifiedPlayer | null = await verifyToken(options?.token);
+  if (v) return { userId: v.userId, username: v.username, pfp: v.pfp, carriedFrom: v.carriedFrom };
+  if (trustClientIds() && typeof options?.userId === "string") return { userId: options.userId.slice(0, 128), carriedFrom: [] };
+  return { userId: "", carriedFrom: [] };
+}
 
 function sanitizeName(raw: unknown): string {
   return typeof raw === "string" ? raw.slice(0, NAME_MAX) : "";
@@ -49,6 +68,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const p = this.state.players.get(client.sessionId);
       const patch = sanitizeProgress(msg);
       if (!p || !patch || !this.loaded.has(client.sessionId)) return;
+      // The others draw this motel from it (guests' too: their save is only never stored).
+      if (patch.motel) p.motel = motelView(patch.motel);
 
       const userId = this.userIds.get(client.sessionId);
       if (!userId) return;
@@ -67,8 +88,22 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           },
           { upsert: true },
         );
+        // What the server now stores is what it reports (leaderboard, stats, ribbons).
+        if (rest.motel) trackPlayer(userId, rest.motel);
       } catch (err) {
         console.warn("[WorldRoom] saveProgress failed", err);
+      }
+    },
+    // A rewarded ad the player watched (client Legion.SDK.ads.showRewarded): the server checks
+    // Boxity's single-use token and answers `adRewardResult` { ok, placement, reason? }. The
+    // client grants the reward (the 2x income boost) only on ok.
+    adReward: async (client: Client, msg: { rewardToken?: unknown; placement?: unknown }) => {
+      const placement = typeof msg?.placement === "string" ? msg.placement.slice(0, 32) : "";
+      const v = await verifyAdReward(msg?.rewardToken);
+      try {
+        client.send("adRewardResult", { ok: v.valid, placement, ...(v.valid ? {} : { reason: v.reason ?? "invalid" }) });
+      } catch {
+        // Gone meanwhile.
       }
     },
     // Claims Daily Reward day `msg.day` (0-based). The server decides: answers `dailyResult`
@@ -129,14 +164,25 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const p = this.state.players.get(client.sessionId);
       if (p) applyAvatar(p, msg);
     },
+    // { avatar, outfit, emote }: how the others draw this player (client src/presence.js).
+    look: (client: Client, msg: unknown) => {
+      const p = this.state.players.get(client.sessionId);
+      if (p) applyAvatar(p, msg);
+    },
     // Re-states identity after a login/logout that happens AFTER join (a guest who signs in
     // mid-session). The server answers with progress/noProgress for the new identity.
-    identify: (client: Client, msg: { username?: string; userId?: string; pfp?: string }) => {
+    // The new identity is the Boxity token it carries (verified here), never a named id.
+    identify: async (client: Client, msg: { username?: string; userId?: string; pfp?: string; token?: string }) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
       if (typeof msg?.username === "string") p.username = sanitizeName(msg.username);
       if (typeof msg?.pfp === "string") p.pfp = sanitizePfp(msg.pfp);
-      if (typeof msg?.userId === "string") this.setUserId(client, p, msg.userId);
+      if (msg?.token === undefined && msg?.userId === undefined) return; // a name / picture update only
+      const id = await identify(msg);
+      if (this.state.players.get(client.sessionId) !== p) return; // left meanwhile
+      if (id.username) p.username = sanitizeName(id.username);
+      if (id.pfp) p.pfp = sanitizePfp(id.pfp);
+      this.setUserId(client, p, id.userId, id.carriedFrom);
     },
   };
 
@@ -160,16 +206,39 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  onJoin(client: Client, options?: { username?: string; userId?: string; pfp?: string; pose?: unknown; loadout?: unknown; avatar?: string }) {
+  // Server identity (docs.bloxity.io, "Server identity"): the join's Boxity token is verified
+  // with POST {BLOXITY_API_URL}/v1/auth/game-token/verify and only the returned user._id is used
+  // as the account id. No token, or a refused one, joins as a guest (never an error).
+  async onAuth(_client: Client, options?: { token?: unknown; userId?: unknown }): Promise<Identity> {
+    return identify(options);
+  }
+
+  // Shutdown / drain: the last leaderboard + stats values of everyone here, then the usual close.
+  async onBeforeShutdown() {
+    await flushReports();
+    this.disconnect();
+  }
+
+  onJoin(client: Client, options?: { username?: string; userId?: string; pfp?: string; pose?: unknown; loadout?: unknown; avatar?: string }, auth?: Identity) {
     const p = new PlayerState();
-    p.username = sanitizeName(options?.username);
-    p.pfp = sanitizePfp(options?.pfp);
+    p.username = sanitizeName(auth?.username || options?.username);
+    p.pfp = sanitizePfp(auth?.pfp || options?.pfp);
     // Presence from the join options, so the others draw the newcomer right away.
     applyPose(p, options?.pose);
     applyLoadout(p, options?.loadout);
     applyAvatar(p, options);
+    p.plot = this.freePlot();
     this.state.players.set(client.sessionId, p);
-    this.setUserId(client, p, typeof options?.userId === "string" ? options.userId : "");
+    this.setUserId(client, p, auth?.userId ?? "", auth?.carriedFrom ?? []);
+  }
+
+  // The lowest plot nobody in the room stands on (maxClients = PLOT_COUNT, so there always is one).
+  // A player keeps theirs for the whole session, reconnects included; it frees when they leave.
+  private freePlot(): number {
+    const taken = new Set<number>();
+    this.state.players.forEach((p) => taken.add(p.plot));
+    for (let i = 0; i < PLOT_COUNT; i++) if (!taken.has(i)) return i;
+    return -1;
   }
 
   // A deliberate `room.leave()` closes with CONSENTED -- drop the player at once. Anything
@@ -202,6 +271,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   // Drops a session's per-connection bookkeeping.
   private forgetSession(sessionId: string) {
+    const userId = this.userIds.get(sessionId);
+    if (userId && ![...this.userIds].some(([sid, uid]) => sid !== sessionId && uid === userId)) void untrackPlayer(userId);
     this.state.players.delete(sessionId);
     this.userIds.delete(sessionId);
     this.identified.delete(sessionId);
@@ -249,10 +320,11 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  // Client-trusted Bloxity user id (guest ids are dropped, see GUEST_ID_PREFIX). A forged id can
-  // only read/overwrite the SENDER's own save (there is no cross-player read in `saveProgress`).
-  // Called from both onJoin and `identify`; answers with progress / noProgress / serverError.
-  private setUserId(client: Client, p: PlayerState, raw: string) {
+  // The connection's account id: the Boxity-verified user._id (see identify()), "" for a guest
+  // (client-made `guest-` ids, only possible in local dev, are dropped too). Called from onJoin
+  // and `identify`; answers with progress / noProgress / serverError. carriedFrom: Boxity guest ids
+  // this browser played as before signing in (their progress may follow, see loadProgress).
+  private setUserId(client: Client, p: PlayerState, raw: string, carriedFrom: string[] = []) {
     let userId = raw.slice(0, 128);
     // Guests (client-made `guest-...` ids) get no identity: nothing is loaded or saved for them.
     if (userId.startsWith(GUEST_ID_PREFIX)) userId = "";
@@ -287,18 +359,42 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.userIds.delete(client.sessionId);
     }
 
-    void this.loadProgress(client, userId, p);
+    void this.loadProgress(client, userId, p, carriedFrom);
+  }
+
+  // Guest progress (docs: CrazyGames > Guest progress): an account with no motel yet takes the
+  // first earlier guest save of this browser that was never carried, and that guest save is
+  // marked so it can never be copied into a second account. Returns the account's doc.
+  private async carryGuestProgress(userId: string, doc: PlayerDoc | null, carriedFrom: string[]): Promise<PlayerDoc | null> {
+    const players = getPlayers();
+    if (!players || doc?.motel || !carriedFrom.length) return doc;
+    for (const guestId of carriedFrom) {
+      if (!guestId || guestId === userId) continue;
+      const guest = await players.findOne({ _id: guestId });
+      if (!guest?.motel || guest.carriedTo) continue;
+      const claim = await players.updateOne({ _id: guestId, carriedTo: { $exists: false } } as any, { $set: { carriedTo: userId } });
+      if (!claim.modifiedCount) continue; // another account took it first
+      await players.updateOne(
+        { _id: userId },
+        { $set: { motel: guest.motel, carriedFrom: guestId, updatedAt: new Date() }, $setOnInsert: { version: 1 } },
+        { upsert: true },
+      );
+      console.log(`[WorldRoom] carried guest progress ${guestId} -> ${userId}`);
+      return { ...(doc ?? { _id: userId, version: 1, updatedAt: new Date() }), motel: guest.motel };
+    }
+    return doc;
   }
 
   // Sends the saved doc to just this client so it can hydrate its state ("progress"), or
   // "noProgress" when there is nothing to load (new account, guest, or Mongo unset). A failed read
   // sends "serverError" and keeps saving off, so a save that could not be read is never overwritten.
-  private async loadProgress(client: Client, userId: string, p: PlayerState) {
+  private async loadProgress(client: Client, userId: string, p: PlayerState, carriedFrom: string[] = []) {
     const players = getPlayers();
     let doc: PlayerDoc | null = null;
     if (userId && players) {
       try {
         doc = await players.findOne({ _id: userId });
+        doc = await this.carryGuestProgress(userId, doc, carriedFrom);
       } catch (err) {
         console.warn("[WorldRoom] loadProgress failed", err);
         client.send("serverError", {});
@@ -309,6 +405,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (this.state.players.get(client.sessionId) !== p || (this.userIds.get(client.sessionId) ?? "") !== userId) return;
 
     this.loaded.add(client.sessionId);
+    p.motel = motelView(doc?.motel ? sanitizeProgress(doc)?.motel : null);
+    if (userId) trackPlayer(userId, doc?.motel ? sanitizeProgress(doc)?.motel : null);
     const now = Date.now();
     const spin = spinStateFrom(doc, now);
     this.spinStates.set(client.sessionId, spin);

@@ -38,6 +38,10 @@ export interface PlayerDoc {
   potions?: Record<string, number>; // potion id -> count (gifts.js)
   lastSeen?: number; // epoch ms of the last activity
   motel?: MotelSave; // Run a Motel: money, upgrades, staff, shop, rooms (motel.ts; client economy.js)
+  // Guest progress carried into an account (WorldRoom carryGuestProgress): on the account, the
+  // guest id it came from; on the guest's doc, the account it went to (it is never copied twice).
+  carriedFrom?: string;
+  carriedTo?: string;
   // Spin wheel (spin.ts): written only by the server's `spin` handler, never by saveProgress.
   spins?: number; // spins ready to use
   spinAt?: number; // epoch ms the next free spin arrives

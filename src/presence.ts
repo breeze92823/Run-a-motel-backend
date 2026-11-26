@@ -1,4 +1,4 @@
-import { AVATAR_MAX_LEN, ID_PATTERN, POSE_BOUNDS, PRESENCE_PETS_MAX, PET_TIERS_MAX } from "./constants.js";
+import { AVATAR_MAX_LEN, EMOTE_ID_MAX, ID_PATTERN, OUTFIT_MAX_LEN, POSE_BOUNDS, PRESENCE_PETS_MAX, PET_TIERS_MAX } from "./constants.js";
 import type { PlayerState } from "./rooms/schema/WorldState.js";
 
 // Presence: what the other clients need to draw a player in the world (client remotePlayers.js).
@@ -20,6 +20,7 @@ export function applyPose(p: PlayerState, msg: unknown): void {
   if (finite(m.z)) p.z = clamp(m.z, -b.z, b.xy);
   if (finite(m.yaw)) p.yaw = Math.atan2(Math.sin(m.yaw), Math.cos(m.yaw));
   if (finite(m.speed)) p.speed = clamp(m.speed, 0, b.speed);
+  if (typeof m.grounded === "boolean") p.grounded = m.grounded;
 }
 
 // `loadout` { boat, engine, trail, partner, pets: [{ kind, tier }], world }: equipped catalog ids
@@ -43,8 +44,13 @@ export function applyLoadout(p: PlayerState, msg: unknown): void {
   }
 }
 
-// `setAvatar` { avatar }: the Bloxity look as an opaque JSON string ("" = default), length-capped.
+// `setAvatar` / `look` { avatar, outfit, emote }: the Bloxity look as an opaque JSON string ("" =
+// default, the manual avatar path), the Boxity outfit key (the character kit's input) and the
+// emote playing now. Each is length-capped and printable; anything else is ignored.
+const printable = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max && /^[!-~]*$/.test(v);
 export function applyAvatar(p: PlayerState, msg: unknown): void {
-  const a = (msg as { avatar?: unknown })?.avatar;
-  if (typeof a === "string" && a.length <= AVATAR_MAX_LEN) p.avatar = a;
+  const m = (msg ?? {}) as { avatar?: unknown; outfit?: unknown; emote?: unknown };
+  if (typeof m.avatar === "string" && m.avatar.length <= AVATAR_MAX_LEN) p.avatar = m.avatar;
+  if (printable(m.outfit, OUTFIT_MAX_LEN)) p.outfit = m.outfit;
+  if (printable(m.emote, EMOTE_ID_MAX)) p.emote = m.emote;
 }

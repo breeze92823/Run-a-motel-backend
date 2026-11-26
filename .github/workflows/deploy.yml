@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options: [staging, prod]
+        default: staging
 
 env:
   REGISTRY: ghcr.io
@@ -29,11 +34,37 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Every push deploys to prod, and to stage too once the repo has LEGION_DEPLOY_TOKEN_STAGE
+  # (docs.bloxity.io > Environments > Release flow). Run workflow picks one platform.
+  targets:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.t.outputs.list }}
+    steps:
+      - id: t
+        env:
+          HAS_STAGE_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN_STAGE != '' }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo 'list=["${{ inputs.target }}"]' >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_STAGE_TOKEN" != "true" ]; then echo 'list=["prod"]' >> "$GITHUB_OUTPUT"
+          else echo 'list=["prod","staging"]' >> "$GITHUB_OUTPUT"; fi
+
   deploy:
     # Pull requests only run the tests above; deploys happen on push / manual run.
     if: github.event_name != 'pull_request'
-    needs: test
+    needs: [test, targets]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # staging can never take prod down with it
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    env:
+      LEGION_URL: ${{ matrix.target == 'staging' && 'https://legion.stage.bloxity.io' || 'https://legion.bloxity.io' }}
+      # A staging job only ever reads the stage token (never the prod one).
+      LEGION_DEPLOY_TOKEN: ${{ secrets[matrix.target == 'staging' && 'LEGION_DEPLOY_TOKEN_STAGE' || 'LEGION_DEPLOY_TOKEN'] }}
+      # Images are tagged per platform, so a staging build never replaces a production image.
+      TAG_PREFIX: ${{ matrix.target == 'staging' && 'stage-' || '' }}
     permissions:
       contents: read
       packages: write
@@ -56,11 +87,9 @@ jobs:
             exit 1
           fi
           if [ -z "${LEGION_DEPLOY_TOKEN}" ]; then
-            echo "::error::Repo secret LEGION_DEPLOY_TOKEN is not set (Settings > Secrets and variables > Actions > Secrets)."
+            echo "::error::The ${{ matrix.target }} deploy token is not set (LEGION_DEPLOY_TOKEN for prod, LEGION_DEPLOY_TOKEN_STAGE for staging)."
             exit 1
           fi
-        env:
-          LEGION_DEPLOY_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN }}
 
       - name: Normalize image name to lowercase
         run: |
@@ -79,10 +108,11 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.GAME_ID }}-server:${{ steps.channel.outputs.channel }}-${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.GAME_ID }}-server:${{ env.TAG_PREFIX }}${{ steps.channel.outputs.channel }}-${{ github.sha }}
 
-      # roomSize = players per room (WorldRoom's maxClients, ROOM_MAX_CLIENTS in src/constants.ts);
-      # the Bloxity matchmaker picks the pod capacity itself, so no seatCap is sent.
+      # seatCap = the room's player cap = WorldRoom's maxClients (ROOM_MAX_CLIENTS in src/constants.ts,
+      # 6: one per motel plot). hosting.bloxity.io/docs: a pod that fills to seatCap makes the
+      # matchmaker start another. roomSize carries the same number for the party matchmaker.
       - name: Deploy to Legion
         run: |
           ROOM_SIZE=$(grep -oP 'ROOM_MAX_CLIENTS\s*=\s*\K\d+' src/constants.ts)
@@ -90,10 +120,9 @@ jobs:
             echo "::error::Could not read ROOM_MAX_CLIENTS from src/constants.ts."
             exit 1
           fi
-          curl -sSf -X POST "https://legion.bloxity.io/v1/apps/${GAME_ID}/deploy" \
+          curl -sSf -X POST "${LEGION_URL}/v1/apps/${GAME_ID}/deploy" \
             -H "Authorization: Bearer ${LEGION_DEPLOY_TOKEN}" \
             -H 'Content-Type: application/json' \
-            -d "{\"channel\":\"${CHANNEL}\",\"image\":\"${REGISTRY}/${OWNER}/${GAME_ID}-server:${CHANNEL}-${{ github.sha }}\",\"version\":\"${{ github.sha }}\",\"roomSize\":${ROOM_SIZE}}"
+            -d "{\"channel\":\"${CHANNEL}\",\"image\":\"${REGISTRY}/${OWNER}/${GAME_ID}-server:${TAG_PREFIX}${CHANNEL}-${{ github.sha }}\",\"version\":\"${{ github.sha }}\",\"seatCap\":${ROOM_SIZE},\"roomSize\":${ROOM_SIZE}}"
         env:
-          LEGION_DEPLOY_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN }}
           CHANNEL: ${{ steps.channel.outputs.channel }}

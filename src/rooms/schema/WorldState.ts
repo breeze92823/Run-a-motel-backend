@@ -22,6 +22,13 @@ export const PlayerState = schema(
     pets: t.string().default(""), // equipped pets "kind:tier,kind:tier"
     world: t.string().default(""), // the world the player is in (client WORLDS id), "" = the start world
     avatar: t.string().default(""), // Bloxity look JSON { equipped, proportions, skin }, "" = default
+    // Run a Motel: the plot (0..PLOT_COUNT-1, client PLOTS) this player's motel stands on, -1 until
+    // assigned; x/y/z/yaw are then feet + heading in that plot's own frame (the client places it).
+    plot: t.int8().default(-1),
+    grounded: t.boolean().default(true), // on the ground (the others' animator: run vs airborne)
+    outfit: t.string().default(""), // Boxity outfit key: the character kit dresses the others' copy
+    emote: t.string().default(""), // the Boxity emote id playing now ("" = none)
+    motel: t.string().default(""), // what the others draw of this motel (motelView.ts), "" = fresh
   },
   "PlayerState",
 );
