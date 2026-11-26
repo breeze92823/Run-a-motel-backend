@@ -74,5 +74,37 @@ describe("motel save", () => {
       assert.deepStrictEqual(got?.motel?.rooms?.["101"]?.furniture, ["fridge"]);
       assert.strictEqual(got?.motel?.game?.rating, 4.2);
     });
+
+    it("answers a save with an ack (the franchise) once it is stored", async () => {
+      const fake = fakePlayers();
+      __setPlayersForTest(fake);
+      const room = await colyseus.createRoom<WorldState>("world", {});
+      const c = await colyseus.connectTo(room, { userId: "f1", username: "Owner" });
+      c.onMessage("noProgress", () => {});
+      const acks: any[] = [];
+      c.onMessage("saved", (m: any) => acks.push(m));
+      fake.release();
+      await sleep(150);
+      c.send("saveProgress", { motel: { money: 1 }, ack: "bad ack!" }); // not echoed
+      c.send("saveProgress", { motel: { money: 2 } }); // no ack, no answer
+      await sleep(100);
+      c.send("saveProgress", { motel: { money: 360, game: { franchise: { level: 1, run: 0 } } }, ack: "f123" });
+      await sleep(200);
+      assert.deepStrictEqual(acks, [{ ack: "f123", stored: true }]);
+      assert.strictEqual((fake.docs.get("f1") as any).motel.game.franchise.level, 1);
+    });
+
+    it("tells a franchise ack it was not stored without a database", async () => {
+      __setPlayersForTest(null);
+      const room = await colyseus.createRoom<WorldState>("world", {});
+      const c = await colyseus.connectTo(room, { userId: "f2", username: "Owner" });
+      c.onMessage("noProgress", () => {});
+      let ack: any = null;
+      c.onMessage("saved", (m: any) => (ack = m));
+      await sleep(150);
+      c.send("saveProgress", { motel: { money: 360 }, ack: "f9" });
+      await sleep(150);
+      assert.deepStrictEqual(ack, { ack: "f9", stored: false });
+    });
   });
 });

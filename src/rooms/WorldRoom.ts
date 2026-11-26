@@ -1,6 +1,6 @@
 import { Room, Client, CloseCode } from "colyseus";
 import { WorldState, PlayerState } from "./schema/WorldState.js";
-import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, PLOT_COUNT, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
+import { ACK_PATTERN, DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, PLOT_COUNT, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
 import { getPlayers, type PlayerDoc } from "../db.js";
 import { sanitizeProgress } from "../sanitize.js";
 import { accrue, rollWedge, spinStateFrom, type SpinState } from "../spin.js";
@@ -64,17 +64,29 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   messages = {
     // Debounced push of the client's whole progress. Upserts, so a first save creates the document.
+    // An optional `ack` (the client's franchise) asks for `saved` { ack, stored } once the write
+    // is done: stored = it is in the database (false for guests, no database or a failed write).
     saveProgress: async (client: Client, msg: unknown) => {
+      const rawAck = (msg as { ack?: unknown } | null)?.ack;
+      const ack = typeof rawAck === "string" && ACK_PATTERN.test(rawAck) ? rawAck : "";
+      const answer = (stored: boolean) => {
+        if (!ack) return;
+        try {
+          client.send("saved", { ack, stored });
+        } catch {
+          // Gone meanwhile.
+        }
+      };
       const p = this.state.players.get(client.sessionId);
       const patch = sanitizeProgress(msg);
-      if (!p || !patch || !this.loaded.has(client.sessionId)) return;
+      if (!p || !patch || !this.loaded.has(client.sessionId)) return answer(false);
       // The others draw this motel from it (guests' too: their save is only never stored).
       if (patch.motel) p.motel = motelView(patch.motel);
 
       const userId = this.userIds.get(client.sessionId);
-      if (!userId) return;
+      if (!userId) return answer(false);
       const players = getPlayers();
-      if (!players) return; // Mongo unset/unreachable -- degrade silently
+      if (!players) return answer(false); // Mongo unset/unreachable -- degrade silently
       // The personal best only ever goes up ($max), so a stale or replayed save can't lower it.
       const { bestDistance, ...rest } = patch;
       try {
@@ -90,8 +102,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         );
         // What the server now stores is what it reports (leaderboard, stats, ribbons).
         if (rest.motel) trackPlayer(userId, rest.motel);
+        answer(true);
       } catch (err) {
         console.warn("[WorldRoom] saveProgress failed", err);
+        answer(false);
       }
     },
     // A rewarded ad the player watched (client Legion.SDK.ads.showRewarded): the server checks

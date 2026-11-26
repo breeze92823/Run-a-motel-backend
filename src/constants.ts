@@ -73,6 +73,8 @@ export const LEADERBOARD_EVERY_MS = 60 * 1000;
 // Ids from the client's catalogs (boats, engines incl. `ladder-N`, partners, trails, pet kinds,
 // potions): camelCase slugs, so nothing odd is stored.
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+// `saveProgress` ack (client net.js franchiseAndReload): echoed back in `saved` { ack, stored }.
+export const ACK_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 // The client's per-browser fallback id for players who are not signed in to Bloxity.
 // Guests are never persisted.
