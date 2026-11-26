@@ -10,7 +10,10 @@ export function installRoomReporter(): void {
   const token = process.env.BLOXITY_REPORT_TOKEN;
   const gameId = process.env.BLOXITY_GAME_ID;
   const podName = process.env.POD_NAME || process.env.HOSTNAME || "";
-  if (!base || !token || !gameId) return;
+  if (!base || !token || !gameId) {
+    if (process.env.BLOXITY_GAME_ID) console.warn("[room-reporter] disabled: missing", !base ? "MATCHMAKER_REPORT_URL" : "BLOXITY_REPORT_TOKEN", "- Open Rooms will be empty");
+    return;
+  }
 
   const url = `${base.replace(/\/$/, "")}/${gameId}/rooms`;
 

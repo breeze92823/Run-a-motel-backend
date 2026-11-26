@@ -110,9 +110,8 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.GAME_ID }}-server:${{ env.TAG_PREFIX }}${{ steps.channel.outputs.channel }}-${{ github.sha }}
 
-      # seatCap = the room's player cap = WorldRoom's maxClients (ROOM_MAX_CLIENTS in src/constants.ts,
-      # 6: one per motel plot). hosting.bloxity.io/docs: a pod that fills to seatCap makes the
-      # matchmaker start another. roomSize carries the same number for the party matchmaker.
+      # roomSize = the room's player cap = WorldRoom's maxClients (ROOM_MAX_CLIENTS in src/constants.ts,
+      # 6: one per motel plot). docs.bloxity.io/#html5: never send seatCap, only roomSize.
       - name: Deploy to Legion
         run: |
           ROOM_SIZE=$(grep -oP 'ROOM_MAX_CLIENTS\s*=\s*\K\d+' src/constants.ts)
@@ -123,6 +122,6 @@ jobs:
           curl -sSf -X POST "${LEGION_URL}/v1/apps/${GAME_ID}/deploy" \
             -H "Authorization: Bearer ${LEGION_DEPLOY_TOKEN}" \
             -H 'Content-Type: application/json' \
-            -d "{\"channel\":\"${CHANNEL}\",\"image\":\"${REGISTRY}/${OWNER}/${GAME_ID}-server:${TAG_PREFIX}${CHANNEL}-${{ github.sha }}\",\"version\":\"${{ github.sha }}\",\"seatCap\":${ROOM_SIZE},\"roomSize\":${ROOM_SIZE}}"
+            -d "{\"channel\":\"${CHANNEL}\",\"image\":\"${REGISTRY}/${OWNER}/${GAME_ID}-server:${TAG_PREFIX}${CHANNEL}-${{ github.sha }}\",\"version\":\"${{ github.sha }}\",\"roomSize\":${ROOM_SIZE}}"
         env:
           CHANNEL: ${{ steps.channel.outputs.channel }}

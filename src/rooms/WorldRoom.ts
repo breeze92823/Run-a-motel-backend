@@ -203,6 +203,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   // Leaderboards (leaderboard.ts): everyone gets the top lists + their own ranks every
   // LEADERBOARD_EVERY_MS, and once right after their save loads.
   onCreate() {
+    // Shown by Boxity's Open Rooms list.
+    void this.setMetadata({ mode: "motel", modeName: "Motel Road" });
     this.clock.setInterval(() => {
       for (const c of this.clients) void this.sendLeaderboard(c);
     }, LEADERBOARD_EVERY_MS);
